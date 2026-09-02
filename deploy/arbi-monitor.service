@@ -1,5 +1,5 @@
 [Unit]
-Description=ARBI multichain DEX monitor
+Description=Arbitrage multichain DEX monitor
 After=network.target
 
 [Service]

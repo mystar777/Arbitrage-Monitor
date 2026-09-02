@@ -1,4 +1,4 @@
-# ARBI Monitor
+# Arbitrage Monitor
 
 Read-only multichain DEX gap monitor with simulation reports and threshold alerts.
 
