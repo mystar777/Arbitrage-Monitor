@@ -1,0 +1,19 @@
+[Unit]
+Description=ARBI multichain DEX monitor
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Web/arbi
+ExecStart=/usr/bin/node /root/Web/arbi/server.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3400
+Environment=SCAN_INTERVAL_MS=60000
+Environment=MIN_LIQUIDITY_USD=10000
+EnvironmentFile=-/etc/arbi-monitor.env
+User=root
+
+[Install]
+WantedBy=multi-user.target
