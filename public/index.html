@@ -76,7 +76,12 @@
   select=function(id){app.selected=app.state?.opportunities?.find(opportunity=>opportunity.id===id)||null;app.simulation=null;render();if(!app.selected)return;const dialog=document.getElementById('opportunityModal');if(dialog&&!dialog.open)dialog.showModal();modal();renderContext('modalBody',app.selected)};
   const opportunityDialog=document.getElementById('opportunityModal');
   const opportunityModalClose=document.getElementById('modalClose');
-  if(opportunityModalClose&&opportunityDialog)opportunityModalClose.onclick=()=>{if(opportunityDialog.open)opportunityDialog.close()};
+  if(opportunityModalClose&&opportunityDialog){
+    opportunityModalClose.onclick=null;
+    opportunityModalClose.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(opportunityDialog.open)opportunityDialog.close()});
+    opportunityDialog.addEventListener('click',event=>{if(event.target===opportunityDialog&&opportunityDialog.open)opportunityDialog.close()});
+  }
+  document.addEventListener('click',event=>{const closeTarget=event.target.closest?.('#modalClose');if(closeTarget){const dialog=document.getElementById('opportunityModal');if(dialog?.open){event.preventDefault();event.stopPropagation();dialog.close()}}},true);
   const historyFeed=$('historyFeed');
   if(historyFeed)historyFeed.addEventListener('click',event=>{const row=event.target.closest('.history-clickable');if(row){const item=(app.state?.history||[])[Number(row.dataset.historyIndex)];if(item)openHistoryReport(item)}});
   if(app.state)render();
