@@ -23,6 +23,10 @@
   @media(max-width:720px){.gap-scroll{max-height:58vh}.list-head{grid-template-columns:minmax(118px,1.2fr) minmax(120px,1fr) 64px 80px 67px;padding-left:15px;padding-right:15px}.gap-scroll-meta{padding-left:15px;padding-right:15px}}
 </style>
 </head>
+<style>
+  .mark{overflow:hidden;padding:0;display:grid;place-items:center}
+  .mark img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+</style>
 <body><main class="app">
   <header class="topbar"><div class="brand"><div class="mark">A↗</div><div><div class="eyebrow">ARBITRAGE / EXECUTION INTELLIGENCE</div><h1>Multichain DEX Monitor</h1><p class="subtitle">Live network telemetry, real market gaps, and explainable simulation reports.</p></div></div><div class="actions"><div class="pill" id="sourcePill"><span class="dot amber" id="sourceDot"></span><span id="sourceStatus">Connecting to scanner</span></div><div class="pill live"><span class="dot"></span>READ-ONLY MONITOR</div><button class="primary" id="scanBtn">Scan now</button></div></header>
   <section class="metrics"><article class="panel metric"><span>Networks monitored</span><strong id="networksMonitored">—</strong><small id="networksWithData">Waiting for telemetry</small></article><article class="panel metric"><span>DEX pairs indexed</span><strong id="pairsIndexed">—</strong><small>Current live snapshot</small></article><article class="panel metric"><span>Live gaps</span><strong class="amber" id="liveGaps">—</strong><small id="qualifiedGaps">No qualification yet</small></article><article class="panel metric"><span>Simulated P&amp;L</span><strong class="green" id="simulatedPnl">$0</strong><small>Session history</small></article><article class="panel metric"><span>Last scan</span><strong id="lastScan">—</strong><small id="scanDuration">Scanner starting</small></article></section>
@@ -53,4 +57,8 @@
     list=function(){if(!app.state)return;renderGapWindow(false)};
     setupGapVirtual();
   </script>
+<script>
+  const titleLogo=document.querySelector('.mark');
+  if(titleLogo&&!titleLogo.querySelector('img')){titleLogo.textContent='';const image=document.createElement('img');image.src='/favicon.svg';image.alt='Arbitrage Monitor logo';titleLogo.appendChild(image)}
+</script>
 </body></html>
