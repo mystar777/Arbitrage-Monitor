@@ -6,6 +6,7 @@ const { URL } = require('url');
 const PORT = Number(process.env.PORT || 3399);
 const SCAN_INTERVAL_MS = Number(process.env.SCAN_INTERVAL_MS || 60000);
 const MIN_LIQUIDITY_USD = Number(process.env.MIN_LIQUIDITY_USD || 10000);
+const MIN_QUOTE_RESERVE_USD = Number(process.env.MIN_QUOTE_RESERVE_USD || 1000);
 const ALERT_GAP_THRESHOLD_PCT = Number(process.env.ALERT_GAP_THRESHOLD_PCT || 5);
 const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_TARGET = String(process.env.TELEGRAM_TARGET || '@plm2000').trim();
@@ -13,6 +14,8 @@ const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 const TELEGRAM_ALERT_COOLDOWN_MS = Number(process.env.TELEGRAM_ALERT_COOLDOWN_MS || 900000);
 const DATA_DIR = path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const SOLANA_RPC_URL = String(process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com').trim();
+const STABLE_SYMBOLS = new Set(['USDC', 'USDC.E', 'USDT', 'USDT.E', 'DAI', 'USDE', 'USDS', 'FDUSD', 'USDD', 'USD0', 'PYUSD']);
 
 const SEARCH_QUERIES = [
   'USDC/USDT', 'USDT/USDC', 'USDC/DAI', 'USDT/DAI', 'USDC/USDE', 'USDC/USDS',
@@ -35,6 +38,7 @@ const state = {
   history: []
 };
 let previousPairs = new Map();
+const tokenRiskCache = new Map();
 const sentTelegramAlerts = new Map();
 const telegramStatus = { configured: Boolean(TELEGRAM_BOT_TOKEN), target: TELEGRAM_TARGET || null, resolved: Boolean(TELEGRAM_CHAT_ID), lastSentAt: null, alertsSent: 0, lastError: null };
 
@@ -53,11 +57,27 @@ function bridgeEstimate(source, destination) {
 }
 function normalizePair(pair) {
   if (!pair || !pair.chainId || !pair.dexId || !isTrackablePair(pair)) return null;
-  const price = Number(pair.priceUsd); const liquidity = Number(pair.liquidity?.usd);
+  const baseAddress = String(pair.baseToken?.address || '').trim(); const quoteAddress = String(pair.quoteToken?.address || '').trim();
+  const price = Number(pair.priceUsd); const liquidity = Number(pair.liquidity?.usd); const quoteReserve = Number(pair.liquidity?.quote);
   // Symbol-only discovery can include spoofed or badly indexed tokens. Keep the
   // live feed conservative until a chain-specific token registry is configured.
-  if (!Number.isFinite(price) || price < 0.8 || price > 1.2 || !Number.isFinite(liquidity) || liquidity < MIN_LIQUIDITY_USD) return null;
-  return { chainId: String(pair.chainId), chain: chainName(pair.chainId), dex: String(pair.dexId), pairAddress: String(pair.pairAddress || ''), url: pair.url || null, base: stableSymbol(pair.baseToken.symbol), quote: stableSymbol(pair.quoteToken.symbol), price, liquidity, volume24h: Number(pair.volume?.h24 || 0), txns24h: Number(pair.txns?.h24?.buys || 0) + Number(pair.txns?.h24?.sells || 0), fetchedAt: new Date().toISOString() };
+  if (!baseAddress || !quoteAddress || !Number.isFinite(price) || price < 0.8 || price > 1.2 || !Number.isFinite(liquidity) || liquidity < MIN_LIQUIDITY_USD) return null;
+  if (STABLE_SYMBOLS.has(stableSymbol(pair.quoteToken.symbol)) && (!Number.isFinite(quoteReserve) || quoteReserve < MIN_QUOTE_RESERVE_USD)) return null;
+  return { chainId: String(pair.chainId), chain: chainName(pair.chainId), dex: String(pair.dexId), pairAddress: String(pair.pairAddress || ''), url: pair.url || null, base: stableSymbol(pair.baseToken.symbol), quote: stableSymbol(pair.quoteToken.symbol), baseAddress, quoteAddress, baseFreezable: null, quoteFreezable: null, price, liquidity, quoteReserve, volume24h: Number(pair.volume?.h24 || 0), txns24h: Number(pair.txns?.h24?.buys || 0) + Number(pair.txns?.h24?.sells || 0), fetchedAt: new Date().toISOString() };
+}
+async function fetchSolanaMintRisk(address) {
+  const cached = tokenRiskCache.get(`solana:${address}`); if (cached && cached.expiresAt > Date.now()) return cached.freezable;
+  try {
+    const response = await fetchJson(SOLANA_RPC_URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getAccountInfo', params: [address, { encoding: 'base64' }] }) });
+    const encoded = response?.result?.value?.data?.[0]; const bytes = encoded ? Buffer.from(encoded, 'base64') : null;
+    const freezable = Boolean(bytes && bytes.length >= 82 && bytes.readUInt32LE(46) === 1);
+    tokenRiskCache.set(`solana:${address}`, { freezable, expiresAt: Date.now() + 600000 }); return freezable;
+  } catch { return null; }
+}
+async function enrichTokenRisks(pairs) {
+  const addresses = [...new Set(pairs.filter(pair => pair.chainId === 'solana').flatMap(pair => [pair.baseAddress, pair.quoteAddress]))];
+  const risks = new Map(await Promise.all(addresses.map(async address => [address, await fetchSolanaMintRisk(address)])));
+  return pairs.map(pair => ({ ...pair, baseFreezable: pair.chainId === 'solana' ? risks.get(pair.baseAddress) ?? null : null, quoteFreezable: pair.chainId === 'solana' ? risks.get(pair.quoteAddress) ?? null : null }));
 }
 function enrichMarketSignals(pairs) {
   const enriched = pairs.map(pair => {
@@ -106,7 +126,7 @@ async function resolveTelegramChatId() {
   return null;
 }
 async function notifyTelegram(opportunities) {
-  const candidates = opportunities.filter(item => item.gapPct >= ALERT_GAP_THRESHOLD_PCT).filter(item => { const previous = sentTelegramAlerts.get(item.id); const changed = !previous || Date.now() - previous.sentAt >= TELEGRAM_ALERT_COOLDOWN_MS || Math.abs(item.gapPct - previous.gapPct) >= 1; if (changed) sentTelegramAlerts.set(item.id, { sentAt: Date.now(), gapPct: item.gapPct }); return changed; }).slice(0, 8);
+  const candidates = opportunities.filter(item => item.alertable && item.gapPct >= ALERT_GAP_THRESHOLD_PCT).filter(item => { const previous = sentTelegramAlerts.get(item.id); const changed = !previous || Date.now() - previous.sentAt >= TELEGRAM_ALERT_COOLDOWN_MS || Math.abs(item.gapPct - previous.gapPct) >= 1; if (changed) sentTelegramAlerts.set(item.id, { sentAt: Date.now(), gapPct: item.gapPct }); return changed; }).slice(0, 8);
   if (!candidates.length) return;
   if (!TELEGRAM_BOT_TOKEN) { telegramStatus.lastError = 'Bot token is not configured'; return; }
   const chatId = await resolveTelegramChatId(); if (!chatId) { telegramStatus.lastError = 'Target chat is not resolved. The target user must start the bot or TELEGRAM_CHAT_ID must be configured.'; return; }
@@ -114,22 +134,28 @@ async function notifyTelegram(opportunities) {
   candidates.forEach((item, index) => { lines.push(`<b>${index + 1}. ${escapeTelegram(item.pair)} · ${item.gapPct.toFixed(3)}%</b>`); lines.push(`${escapeTelegram(item.classification.type)} · ${escapeTelegram(item.buy.chain)} / ${escapeTelegram(item.buy.dex)} → ${escapeTelegram(item.sell.chain)} / ${escapeTelegram(item.sell.dex)}`); lines.push(`<b>Model:</b> gross ${item.grossUsd.toFixed(0)} USD · estimated net ${item.estimatedNetUsd.toFixed(0)} USD`); lines.push(`<b>Why it may exist:</b> ${escapeTelegram(item.classification.risk)}`); lines.push('<b>Procedure</b>'); opportunityProcedure(item).forEach(step => lines.push(escapeTelegram(step))); const links = opportunityLinks(item); if (links) lines.push(`<b>Links:</b> ${links}`); lines.push(''); });
   try { await telegramRequest('sendMessage', { chat_id: chatId, text: lines.join('\n').slice(0, 4090), parse_mode: 'HTML', disable_web_page_preview: true }); telegramStatus.lastSentAt = new Date().toISOString(); telegramStatus.alertsSent += candidates.length; telegramStatus.lastError = null; } catch (error) { telegramStatus.lastError = error.message; }
 }
-async function fetchJson(url) {
+async function fetchJson(url, options = {}) {
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 12000);
-  try { const response = await fetch(url, { headers: { accept: 'application/json' }, signal: controller.signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json(); }
+  try { const response = await fetch(url, { ...options, headers: { accept: 'application/json', ...(options.headers || {}) }, signal: controller.signal }); if (!response.ok) throw new Error(`HTTP ${response.status}`); return await response.json(); }
   finally { clearTimeout(timeout); }
 }
 function buildOpportunity(low, high) {
-  if (!low || !high || low.pairAddress === high.pairAddress || low.base !== high.base) return null;
+  if (!low || !high || low.pairAddress === high.pairAddress || low.base !== high.base || low.quote !== high.quote) return null;
+  const sameChain = low.chainId === high.chainId;
+  const sameTokenAddresses = low.baseAddress.toLowerCase() === high.baseAddress.toLowerCase() && low.quoteAddress.toLowerCase() === high.quoteAddress.toLowerCase();
+  if (sameChain && !sameTokenAddresses) return null;
+  if (low.baseFreezable === true || high.baseFreezable === true) return null;
   const lowPrice = Math.min(low.price, high.price); const highPrice = Math.max(low.price, high.price); const buy = low.price <= high.price ? low : high; const sell = buy === low ? high : low;
   const gapPct = (highPrice - lowPrice) / lowPrice * 100; if (gapPct <= 0.05 || gapPct > 50) return null;
   const bridge = bridgeEstimate(buy.chainId, sell.chainId); const classification = classifyGap(buy, sell, gapPct); const capital = Math.min(25000, buy.liquidity * 0.04, sell.liquidity * 0.04);
   const tradingFee = capital * 0.0025 * 2; const slippage = capital * Math.min(0.012, capital / Math.min(buy.liquidity, sell.liquidity) * 0.6); const bridgeFee = capital * bridge.feeBps / 10000; const gas = buy.chainId === 'ethereum' || sell.chainId === 'ethereum' ? 35 : 4; const gross = capital * gapPct / 100; const net = gross - tradingFee - slippage - bridgeFee - gas;
-  return { id: `${buy.chainId}:${buy.dex}:${buy.pairAddress}:${sell.chainId}:${sell.dex}:${sell.pairAddress}`, detectedAt: new Date().toISOString(), pair: `${buy.base} / ${buy.quote}`, asset: buy.base, buy: { chainId: buy.chainId, chain: buy.chain, dex: buy.dex, price: buy.price, liquidity: buy.liquidity, pairAddress: buy.pairAddress, url: buy.url, priceChangePct: buy.priceChangePct, liquidityChangePct: buy.liquidityChangePct }, sell: { chainId: sell.chainId, chain: sell.chain, dex: sell.dex, price: sell.price, liquidity: sell.liquidity, pairAddress: sell.pairAddress, url: sell.url, priceChangePct: sell.priceChangePct, liquidityChangePct: sell.liquidityChangePct }, gapPct: round(gapPct, 3), grossUsd: round(gross), estimatedNetUsd: round(net), estimatedNetPct: round(net / capital * 100, 3), liquidityUsd: round(Math.min(buy.liquidity, sell.liquidity)), bridgeMinutes: bridge.minutes, bridgeMode: bridge.mode, freshnessSeconds: 0, costs: { tradingFeeUsd: round(tradingFee), slippageUsd: round(slippage), bridgeFeeUsd: round(bridgeFee), gasUsd: round(gas) }, classification, status: net / capital * 100 >= 0.35 && net > 0 ? 'qualified' : 'observed', source: 'DEX Screener snapshot', simulated: false };
+  const identityVerified = sameChain && sameTokenAddresses;
+  const risk = identityVerified ? classification.risk : `${classification.risk} Cross-chain token identity is symbol-level only; verify the mint/contract mapping before trading.`;
+  return { id: `${buy.chainId}:${buy.dex}:${buy.pairAddress}:${sell.chainId}:${sell.dex}:${sell.pairAddress}`, detectedAt: new Date().toISOString(), pair: `${buy.base} / ${buy.quote}`, asset: buy.base, buy: { chainId: buy.chainId, chain: buy.chain, dex: buy.dex, price: buy.price, liquidity: buy.liquidity, quoteReserve: buy.quoteReserve, pairAddress: buy.pairAddress, baseAddress: buy.baseAddress, quoteAddress: buy.quoteAddress, url: buy.url, priceChangePct: buy.priceChangePct, liquidityChangePct: buy.liquidityChangePct }, sell: { chainId: sell.chainId, chain: sell.chain, dex: sell.dex, price: sell.price, liquidity: sell.liquidity, quoteReserve: sell.quoteReserve, pairAddress: sell.pairAddress, baseAddress: sell.baseAddress, quoteAddress: sell.quoteAddress, url: sell.url, priceChangePct: sell.priceChangePct, liquidityChangePct: sell.liquidityChangePct }, gapPct: round(gapPct, 3), grossUsd: round(gross), estimatedNetUsd: round(net), estimatedNetPct: round(net / capital * 100, 3), liquidityUsd: round(Math.min(buy.liquidity, sell.liquidity)), bridgeMinutes: bridge.minutes, bridgeMode: bridge.mode, freshnessSeconds: 0, costs: { tradingFeeUsd: round(tradingFee), slippageUsd: round(slippage), bridgeFeeUsd: round(bridgeFee), gasUsd: round(gas) }, classification: { ...classification, risk }, identityVerified, alertable: identityVerified, status: net / capital * 100 >= 0.35 && net > 0 ? 'qualified' : 'observed', source: 'DEX Screener snapshot', simulated: false };
 }
 function findOpportunities(pairs) {
   const groups = new Map(); for (const pair of pairs) { const key = `${pair.base}|${pair.quote}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(pair); }
-  const opportunities = []; for (const group of groups.values()) { group.sort((a, b) => a.price - b.price); const opportunity = buildOpportunity(group[0], group[group.length - 1]); if (opportunity) opportunities.push(opportunity); }
+  const opportunities = []; for (const group of groups.values()) { group.sort((a, b) => a.price - b.price); for (let i = 0; i < group.length; i += 1) for (let j = i + 1; j < group.length; j += 1) { const opportunity = buildOpportunity(group[i], group[j]); if (opportunity) opportunities.push(opportunity); } }
   return opportunities.sort((a, b) => b.estimatedNetPct - a.estimatedNetPct).slice(0, 100);
 }
 function simulateOpportunity(opportunity) {
@@ -140,7 +166,7 @@ async function scan() {
   const started = Date.now(); state.scanner.sourceStatus = 'scanning'; state.scanner.errors = [];
   const results = await Promise.allSettled(SEARCH_QUERIES.map(query => fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(query)}`))); const allPairs = [];
   results.forEach((result, index) => { if (result.status === 'fulfilled') (result.value.pairs || []).forEach(pair => { const normalized = normalizePair(pair); if (normalized) allPairs.push(normalized); }); else state.scanner.errors.push(`${SEARCH_QUERIES[index]}: ${result.reason?.message || 'request failed'}`); });
-  const unique = enrichMarketSignals([...new Map(allPairs.map(pair => [`${pair.chainId}:${pair.pairAddress}`, pair])).values()]); const byChain = new Map(); unique.forEach(pair => byChain.set(pair.chainId, (byChain.get(pair.chainId) || 0) + 1));
+  const unique = enrichMarketSignals(await enrichTokenRisks([...new Map(allPairs.map(pair => [`${pair.chainId}:${pair.pairAddress}`, pair])).values()])); const byChain = new Map(); unique.forEach(pair => byChain.set(pair.chainId, (byChain.get(pair.chainId) || 0) + 1));
   state.networks = WATCHLIST.map(id => ({ id, name: CHAIN_NAMES[id] || id, status: byChain.get(id) ? 'online' : 'quiet', pairs: byChain.get(id) || 0, lastSeen: byChain.get(id) ? new Date().toISOString() : null })); state.opportunities = findOpportunities(unique); state.scanner.durationMs = Date.now() - started; state.scanner.lastScan = new Date().toISOString(); state.scanner.nextScan = new Date(Date.now() + SCAN_INTERVAL_MS).toISOString(); state.scanner.sourceStatus = results.some(result => result.status === 'fulfilled') ? 'live' : 'error';
   for (const opportunity of state.opportunities.slice(0, 20)) {
     const recent = state.history.find(item => item.status === 'detected' && item.opportunityId === opportunity.id && Date.now() - Date.parse(item.detectedAt) < 300000);

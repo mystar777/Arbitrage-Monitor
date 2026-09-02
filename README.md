@@ -6,6 +6,8 @@ Read-only multichain DEX gap monitor with simulation reports and threshold alert
 
 - DEX Screener discovery across stablecoin and selected major-asset pools.
 - Cross-chain and same-chain pool comparison with conservative liquidity, fee, slippage, bridge, and gas estimates.
+- Same-chain opportunities require matching base and quote token addresses; symbol-only matches are never treated as executable arbitrage.
+- Stable-quote pools must expose a minimum quote reserve, and Solana base mints with a freeze authority are excluded from opportunities.
 - Heuristic incident signals for sharp price or liquidity dislocations. These signals are not proof of an exploit and require manual verification.
 - Telegram digest alerts when a live gap is at or above `ALERT_GAP_THRESHOLD_PCT` (default: 5%). Alerts include pool links, classification, modeled economics, and a review procedure.
 - Historical incident replay is clearly separated from live scanner output.
