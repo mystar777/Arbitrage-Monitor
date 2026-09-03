@@ -123,6 +123,15 @@
   if(app.state)renderPnl(app.pnl||app.state.summary?.pnl);
 </script>
 <style>
+  .net-negative{color:var(--red)!important}
+</style>
+<script>
+  function markNegativeNetValues(){document.querySelectorAll('.profit,.green').forEach(node=>{const text=node.textContent||'';const negative=text.includes('$-')||text.includes('-$')||text.includes('−');node.classList.toggle('net-negative',negative)})}
+  const netValueObserver=new MutationObserver(()=>requestAnimationFrame(markNegativeNetValues));
+  netValueObserver.observe(document.body,{childList:true,subtree:true});
+  markNegativeNetValues();
+</script>
+<style>
   .outcome-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:14px}
   .outcome-card{border:1px solid var(--line);border-radius:9px;padding:9px;background:#ffffff05}
   .outcome-card span{display:block;color:var(--muted);font-size:9px}
