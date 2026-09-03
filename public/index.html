@@ -150,4 +150,12 @@
   simulate=async function(x){if(!x?.id)return;const buttons=[...document.querySelectorAll('#runSimulation,#modalSimulate')];buttons.forEach(button=>{button.disabled=true;button.dataset.simulationRunning='true';button.textContent='Running…'});try{const response=await fetch(`/api/opportunities/${encodeURIComponent(x.id)}/simulate`,{method:'POST',headers:{accept:'application/json'}}),payload=await response.json();if(!response.ok)throw new Error(payload.error||'Simulation failed');app.state=payload.state;app.selected=payload.opportunity;app.simulation=payload.simulation;render();modal();renderContext('modalBody',app.selected)}catch(error){const target=document.getElementById('opportunityModal')?.open?document.getElementById('modalBody'):document.getElementById('inspectorBody');if(target)target.insertAdjacentHTML('afterbegin',`<div class="simulation-inline-error">Simulation failed: ${esc(error.message||'Unknown error')}</div>`)}finally{buttons.forEach(button=>{button.disabled=false;button.removeAttribute('data-simulation-running');if(button.textContent==='Running…')button.textContent='Run simulation'})}};
   document.addEventListener('click',event=>{const button=event.target.closest?.('#runSimulation,#modalSimulate');if(!button)return;event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();if(app.selected)simulate(app.selected)},true);
 </script>
+<style>
+  @media(min-width:1101px){
+    .metrics{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr))}
+    .pnl-metric{grid-column:3 / span 2;grid-row:1 / span 2}
+    .metric:not(.pnl-metric){min-height:0;padding:13px 15px}
+    .metric:not(.pnl-metric) strong{font-size:23px}
+  }
+</style>
 </body></html>
