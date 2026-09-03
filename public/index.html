@@ -126,10 +126,7 @@
   .net-negative{color:var(--red)!important}
 </style>
 <script>
-  function markNegativeNetValues(){document.querySelectorAll('.profit,.green').forEach(node=>{const text=node.textContent||'';const negative=text.includes('$-')||text.includes('-$')||text.includes('−');node.classList.toggle('net-negative',negative)})}
-  const netValueObserver=new MutationObserver(()=>requestAnimationFrame(markNegativeNetValues));
-  netValueObserver.observe(document.body,{childList:true,subtree:true});
-  markNegativeNetValues();
+  virtualRow=function(x){const net=Number(x.estimatedNetUsd)||0;const netClass=net<0?'net-negative':'net-positive';return`<button class="opportunity ${app.selected?.id===x.id?'selected':''}" data-id="${encodeURIComponent(x.id)}"><div><div class="pair">${esc(x.pair)}</div><div class="route">${esc(x.buy.chain)} · ${esc(x.buy.dex)}</div></div><div><div class="pair">${esc(x.buy.dex)} <span class="arrow">→</span> ${esc(x.sell.dex)}</div><div class="route">${esc(x.buy.chain)} → ${esc(x.sell.chain)}</div></div><div class="gap">${pct(x.gapPct)}</div><div class="profit ${netClass}">${money(net)}<div class="route">${pct(x.estimatedNetPct)} net</div></div><span class="status ${x.status==='observed'?'observed':''}">${x.status}</span></button>`};
 </script>
 <style>
   .outcome-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:14px}
