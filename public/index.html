@@ -86,4 +86,55 @@
   if(historyFeed)historyFeed.addEventListener('click',event=>{const row=event.target.closest('.history-clickable');if(row){const item=(app.state?.history||[])[Number(row.dataset.historyIndex)];if(item)openHistoryReport(item)}});
   if(app.state)render();
 </script>
+<style>
+  .pnl-metric{grid-column:span 2;min-width:0}
+  .pnl-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .pnl-label-row>span{display:block}
+  .pnl-controls{display:grid;grid-template-columns:1fr 1.15fr auto;gap:7px;align-items:end;margin-top:12px}
+  .pnl-control{min-width:0}
+  .pnl-control label{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px}
+  .pnl-control select,.pnl-control input{width:100%;min-width:0;border:1px solid var(--line);border-radius:7px;color:var(--soft);background:#ffffff08;padding:6px 7px;font:10px Inter,system-ui,sans-serif}
+  .pnl-controls .primary{padding:7px 9px}
+  .pnl-breakdown{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:11px;padding-top:10px;border-top:1px solid var(--line)}
+  .pnl-breakdown span{display:block;color:var(--muted);font-size:9px}
+  .pnl-breakdown strong{display:block;color:var(--soft);font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums}
+  .pnl-breakdown .loss strong{color:var(--red)}
+  .pnl-breakdown .positive strong{color:var(--green)}
+  @media(max-width:1100px){.pnl-metric{grid-column:span 2}}
+  @media(max-width:620px){.pnl-metric{grid-column:span 2}.pnl-controls{grid-template-columns:1fr 1fr}.pnl-controls .primary{grid-column:1 / -1}.pnl-breakdown{grid-template-columns:1fr 1fr}}
+</style>
+<script>
+  const pnlMetric=document.getElementById('simulatedPnl')?.closest('.metric');
+  if(pnlMetric&&!document.getElementById('pnlPeriod')){
+    pnlMetric.classList.add('pnl-metric');
+    const originalLabel=pnlMetric.querySelector(':scope > span');
+    if(originalLabel)originalLabel.textContent='Expected P&L';
+    const originalNote=pnlMetric.querySelector(':scope > small');
+    if(originalNote){originalNote.id='pnlSummary';originalNote.textContent='Configure period and starting capital';}
+    pnlMetric.insertAdjacentHTML('beforeend',`<div class="pnl-controls"><div class="pnl-control"><label for="pnlPeriod">Period</label><select id="pnlPeriod"><option value="24">24 hours</option><option value="168">7 days</option><option value="720">30 days</option><option value="2160">90 days</option></select></div><div class="pnl-control"><label for="pnlCapital">Starting capital (USD)</label><input id="pnlCapital" type="number" min="1" step="100" value="10000" inputmode="decimal"></div><button class="primary" id="pnlApply" type="button">Apply</button></div><div class="pnl-breakdown" id="pnlBreakdown"></div>`);
+  }
+  const signedPnlMoney=value=>{const amount=Math.abs(Number(value)||0).toLocaleString('en-US',{maximumFractionDigits:0});return Number(value)<0?`-$${amount}`:`$${amount}`};
+  function renderPnl(pnl){if(!pnl)return;setText('simulatedPnl',signedPnlMoney(pnl.pnlUsd));setClass('simulatedPnl',`metric-pnl-value ${Number(pnl.pnlUsd)>=0?'green':'red'}`);setText('pnlSummary',`${pnl.periodLabel} · ${pnl.attempts} attempts · ${signedPnlMoney(pnl.startingCapitalUsd)} start`);setHTML('pnlBreakdown',`<div class="positive"><span>Gap holds</span><strong>${signedPnlMoney(pnl.persistedContributionUsd)}</strong></div><div class="loss"><span>Gap reverts</span><strong>${signedPnlMoney(pnl.revertedLossUsd)}</strong></div><div><span>Avg. reversion risk</span><strong>${Number(pnl.averageReversionProbability||0).toFixed(1)}%</strong></div>`)}
+  const baseMetricsForPnl=metrics;
+  metrics=function(){baseMetricsForPnl();renderPnl(app.pnl||app.state?.summary?.pnl)};
+  async function refreshPnl(){const period=document.getElementById('pnlPeriod'),capital=document.getElementById('pnlCapital'),button=document.getElementById('pnlApply');if(!period||!capital)return;const hours=Math.max(1,Number(period.value)||24),starting=Math.max(1,Number(capital.value)||10000);if(button){button.disabled=true;button.textContent='Updating…'}try{const response=await fetch(`/api/pnl?hours=${encodeURIComponent(hours)}&capital=${encodeURIComponent(starting)}`,{cache:'no-store'});if(!response.ok)throw new Error('P&L unavailable');app.pnl=await response.json();renderPnl(app.pnl)}catch(error){setText('pnlSummary','P&L data unavailable')}finally{if(button){button.disabled=false;button.textContent='Apply'}}}
+  const pnlApplyButton=document.getElementById('pnlApply');
+  if(pnlApplyButton)pnlApplyButton.onclick=refreshPnl;
+  if(app.state)renderPnl(app.pnl||app.state.summary?.pnl);
+</script>
+<style>
+  .outcome-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:14px}
+  .outcome-card{border:1px solid var(--line);border-radius:9px;padding:9px;background:#ffffff05}
+  .outcome-card span{display:block;color:var(--muted);font-size:9px}
+  .outcome-card strong{display:block;color:var(--soft);font-size:11px;margin-top:4px;font-variant-numeric:tabular-nums}
+  .outcome-card.success strong{color:var(--green)}
+  .outcome-card.loss strong{color:var(--red)}
+  .outcome-note{margin-top:9px;color:var(--muted);font-size:10px;line-height:1.5}
+  @media(max-width:620px){.outcome-grid{grid-template-columns:1fr 1fr}}
+</style>
+<script>
+  const simulationMoney=value=>{const amount=Math.abs(Number(value)||0).toLocaleString('en-US',{maximumFractionDigits:0});return Number(value)<0?`-$${amount}`:`$${amount}`};
+  flow=function(sim){if(!sim)return'';return`<div class="timeline">${sim.timeline.map((x,i)=>`<div class="step"><div class="step-dot">${String(i+1).padStart(2,'0')}</div><div class="step-label">${esc(x.label)}</div></div>`).join('')}</div><div class="outcome-grid"><div class="outcome-card"><span>Expected result</span><strong class="${Number(sim.netUsd)>=0?'green':'red'}">${simulationMoney(sim.netUsd)}</strong></div><div class="outcome-card success"><span>If gap holds</span><strong>${simulationMoney(sim.persistedNetUsd)}</strong></div><div class="outcome-card loss"><span>If gap reverts</span><strong>${simulationMoney(sim.revertedNetUsd)}</strong></div><div class="outcome-card"><span>Reversion risk</span><strong>${(Number(sim.reversionProbability||0)*100).toFixed(1)}%</strong></div></div><div class="outcome-note">${esc(sim.outcomeNote||'The expected result includes both a persisted-gap path and a cost-only reversion path.')}</div><div class="flow">${esc(sim.timeline.map(x=>x.detail).join(' '))}</div>`};
+  if(app.state)render();
+</script>
 </body></html>
