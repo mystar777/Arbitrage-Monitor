@@ -121,18 +121,30 @@ function classifyGap(buy, sell, gapPct) {
 function escapeTelegram(value) { return String(value ?? '').replace(/[&<>]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char])); }
 function opportunityLinks(opportunity) {
   return [
-    opportunity.buy.url ? `<a href="${escapeTelegram(opportunity.buy.url)}">Buy pool</a>` : null,
-    opportunity.sell.url ? `<a href="${escapeTelegram(opportunity.sell.url)}">Sell pool</a>` : null
+    opportunity.buy.url ? `<a href="${escapeTelegram(opportunity.buy.url)}">매수 풀</a>` : null,
+    opportunity.sell.url ? `<a href="${escapeTelegram(opportunity.sell.url)}">매도 풀</a>` : null
   ].filter(Boolean).join(' · ');
+}
+function opportunityTelegramType(opportunity) {
+  const type = opportunity.classification?.type || '';
+  if (type.includes('incident')) return '잠재적 풀/사고 가격 괴리';
+  if (type.includes('Cross-chain')) return '체인 간 DEX 갭';
+  return 'DEX 풀 가격 갭';
+}
+function opportunityTelegramRisk(opportunity) {
+  const type = opportunity.classification?.type || '';
+  if (type.includes('incident')) return '급격한 가격 또는 유동성 변화가 감지되었습니다. 거래 전에 익스플로잇, 리오그, 오라클 오류 또는 오래된 인덱싱 여부를 확인하세요.';
+  if (type.includes('Cross-chain')) return '브릿지 정산, 자금 재고, 체인 확정성, 가격 조회의 최신 상태를 확인해야 합니다.';
+  return '실행을 가정하기 전에 두 풀의 가격을 다시 조회하고 유동성을 확인하세요.';
 }
 function opportunityProcedure(opportunity) {
   const crossChain = opportunity.buy.chainId !== opportunity.sell.chainId;
   return [
-    '1. Re-quote both pools and verify token contract addresses, liquidity, and block freshness.',
-    opportunity.classification.type.includes('incident') ? '2. Pause and investigate rollback, exploit, oracle, or stale-indexing evidence before moving funds.' : '2. Confirm the spread survives conservative slippage, fees, gas, and price impact.',
-    crossChain ? '3. Confirm bridge/CCTP message state, destination finality, and available inventory on both chains.' : '3. Keep inventory on the same chain and check both swap routes can settle atomically enough for the risk budget.',
-    crossChain ? '4. Execute only with pre-funded inventory or a tested settlement path; never assume a bridge message is final.' : '4. Simulate buy → sell → settlement, then enforce a max loss and minimum net-profit threshold.',
-    '5. Save transaction hashes and compare realized P&L against this alert; this monitor does not sign or submit transactions.'
+    '1. 두 풀의 가격을 다시 조회하고 토큰 컨트랙트 주소, 유동성, 블록 최신성을 확인하세요.',
+    opportunity.classification.type.includes('incident') ? '2. 자금을 이동하기 전에 롤백, 익스플로잇, 오라클 오류 또는 오래된 인덱싱의 증거를 확인하고 거래를 중지하세요.' : '2. 보수적인 슬리피지, 수수료, 가스비, 가격 영향을 반영한 뒤에도 갭이 유지되는지 확인하세요.',
+    crossChain ? '3. 브릿지/CCTP 메시지 상태, 목적지 체인의 확정성, 양쪽 체인의 사용 가능한 자금 재고를 확인하세요.' : '3. 같은 체인에 자금을 준비하고, 두 스왑 경로가 감당 가능한 위험 범위에서 충분히 원자적으로 정산되는지 확인하세요.',
+    crossChain ? '4. 사전에 준비된 자금이나 검증된 정산 경로로만 실행하세요. 브릿지 메시지가 최종 완료되었다고 가정하지 마세요.' : '4. 매수 → 매도 → 정산 과정을 시뮬레이션하고 최대 손실 및 최소 순이익 기준을 적용하세요.',
+    '5. 트랜잭션 해시를 저장하고 실제 손익을 이 알림과 비교하세요. 이 모니터는 트랜잭션에 서명하거나 제출하지 않습니다.'
   ];
 }
 async function telegramRequest(method, payload = {}) {
@@ -152,8 +164,8 @@ async function notifyTelegram(opportunities) {
   if (!candidates.length) return;
   if (!TELEGRAM_BOT_TOKEN) { telegramStatus.lastError = 'Bot token is not configured'; return; }
   const chatId = await resolveTelegramChatId(); if (!chatId) { telegramStatus.lastError = 'Target chat is not resolved. The target user must start the bot or TELEGRAM_CHAT_ID must be configured.'; return; }
-  const lines = ['<b>ARBITRAGE ALERT · GAP ≥ 5%</b>', `Detected ${candidates.length} candidate${candidates.length === 1 ? '' : 's'} from the live DEX scan.`, ''];
-  candidates.forEach((item, index) => { lines.push(`<b>${index + 1}. ${escapeTelegram(item.pair)} · ${item.gapPct.toFixed(3)}%</b>`); lines.push(`${escapeTelegram(item.classification.type)} · ${escapeTelegram(item.buy.chain)} / ${escapeTelegram(item.buy.dex)} → ${escapeTelegram(item.sell.chain)} / ${escapeTelegram(item.sell.dex)}`); lines.push(`<b>Model:</b> gross ${item.grossUsd.toFixed(0)} USD · estimated net ${item.estimatedNetUsd.toFixed(0)} USD`); lines.push(`<b>Why it may exist:</b> ${escapeTelegram(item.classification.risk)}`); lines.push('<b>Procedure</b>'); opportunityProcedure(item).forEach(step => lines.push(escapeTelegram(step))); const links = opportunityLinks(item); if (links) lines.push(`<b>Links:</b> ${links}`); lines.push(''); });
+  const lines = ['<b>아비트라지 알림 · 갭 ≥ 5%</b>', `실시간 DEX 스캔에서 ${candidates.length}개의 기회가 감지되었습니다.`, ''];
+  candidates.forEach((item, index) => { lines.push(`<b>${index + 1}. ${escapeTelegram(item.pair)} · ${item.gapPct.toFixed(3)}%</b>`); lines.push(`${escapeTelegram(opportunityTelegramType(item))} · ${escapeTelegram(item.buy.chain)} / ${escapeTelegram(item.buy.dex)} → ${escapeTelegram(item.sell.chain)} / ${escapeTelegram(item.sell.dex)}`); lines.push(`<b>모델:</b> 예상 총수익 ${item.grossUsd.toFixed(0)} USD · 예상 순수익 ${item.estimatedNetUsd.toFixed(0)} USD`); lines.push(`<b>발생 가능성:</b> ${escapeTelegram(opportunityTelegramRisk(item))}`); lines.push('<b>실행 절차</b>'); opportunityProcedure(item).forEach(step => lines.push(escapeTelegram(step))); const links = opportunityLinks(item); if (links) lines.push(`<b>링크:</b> ${links}`); lines.push(''); });
   try { await telegramRequest('sendMessage', { chat_id: chatId, text: lines.join('\n').slice(0, 4090), parse_mode: 'HTML', disable_web_page_preview: true }); telegramStatus.lastSentAt = new Date().toISOString(); telegramStatus.alertsSent += candidates.length; telegramStatus.lastError = null; } catch (error) { telegramStatus.lastError = error.message; }
 }
 async function fetchJson(url, options = {}) {
